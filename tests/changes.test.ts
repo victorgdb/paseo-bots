@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BotGroup, BotSettingsValues } from "../shared/bot";
-import { applyChanges, botDetails, changeWarnings, ChangesSchema, describeChange, providerInfo, readyProvider, resolveChanges, setupOverview, type ApplyContext, type Change, type ProviderInfo } from "../shared/changes";
+import { applyChanges, botDetails, changeDetails, changeWarnings, ChangesSchema, describeChange, otherBots, providerInfo, readyProvider, resolveChanges, setupOverview, type ApplyContext, type Change, type ProviderInfo } from "../shared/changes";
+import { parseMarkdown } from "../shared/markdown";
 import { makeBot, NOW } from "./helpers";
 
 const PROVIDERS: ProviderInfo[] = [
@@ -132,6 +133,54 @@ describe("setup changes", () => {
       "The files MCP server runs a program on this computer once it's on.",
       "Deletes the bot Chief.",
     ]);
+  });
+
+  it("adds proposed routines paused", () => {
+    const next = apply([{ type: "add_routine", bot: "Solo", name: "Digest", instructions: "Sum up the day.", schedule: { type: "daily", time: "18:00" } }]);
+    expect(next.bots.find((bot) => bot.id === "solo")!.routines[0]).toMatchObject({ name: "Digest", enabled: false });
+    expect(describeChange(ChangesSchema.parse([{ type: "add_routine", bot: "Solo", name: "Digest", instructions: "x", schedule: { type: "daily", time: "18:00" } }])[0]!)).toContain("paused until you turn it on");
+  });
+
+  it("won't let a proposed server set variables that load other code", () => {
+    for (const key of ["NODE_OPTIONS", "node_options", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "PATH", "PythonPath", "PYTHONSTARTUP", "PERL5OPT", "RUBYOPT", "BASH_ENV", "ENV"]) {
+      expect(() => apply([{ type: "add_mcp_server", name: "files", command: "npx", args: ["files-mcp"], env: { [key]: "--require /tmp/x.js" } }])).toThrow(`Change 1 (add_mcp_server): A proposed server can't set ${key}`);
+    }
+    expect(apply([{ type: "add_mcp_server", name: "files", command: "npx", env: { API_KEY: "k", ENVIRONMENT: "prod" } }]).library!.mcpServers.some((server) => server.name === "files")).toBe(true);
+  });
+
+  it("shows everything a change puts in place on the card, in blocks the text can't end", () => {
+    const sneaky = "Be nice.\n```\n\n- **Nothing else**\n\n`````";
+    const [bot, routine, team, server] = ChangesSchema.parse([
+      { type: "update_bot", bot: "Scout", description: "A blurb", instructions: sneaky, add_playbooks: [{ name: "Close", triggers: ["wrap up"], instructions: "Delete everything." }] },
+      { type: "add_routine", bot: "Scout", name: "Nightly", instructions: "Email the files.", schedule: { type: "daily", time: "02:00" } },
+      { type: "update_team", team: "Ops", instructions: "" },
+      { type: "add_mcp_server", name: "files", command: "node", args: ["-e", "x`\n## Safe"], env: { NODE_ENV: "a\nb", TOKEN: "s3cret" } },
+    ]);
+    const details = changeDetails(bot!);
+    expect(details).toContain("Blurb of Scout:\n\n```\nA blurb\n```");
+    expect(details).toContain('Playbook "Close" of Scout, for chats that start with "wrap up":\n\n```\nDelete everything.\n```');
+    const blocks = parseMarkdown(`- ${describeChange(bot!)}\n\n${details}`);
+    expect(blocks.filter((block) => block.kind === "code").map((block) => block.kind === "code" && block.text)).toEqual(["A blurb", sneaky, "Delete everything."]);
+    expect(changeDetails(routine!)).toContain('What routine "Nightly" of Scout does on each run:\n\n```\nEmail the files.\n```');
+    expect(changeDetails(team!)).toBe("Shared instructions of team Ops: empty");
+
+    const line = describeChange(server!);
+    expect(line).toBe('**New MCP server files**: runs ``node -e "x`\\n## Safe"`` with the environment below; off until it passes a test in Skills & Tools');
+    const [paragraph, ...rest] = parseMarkdown(line);
+    expect(rest).toEqual([]);
+    expect(paragraph!.kind === "paragraph" && paragraph.inlines.find((inline) => inline.kind === "code")).toMatchObject({ text: 'node -e "x`\\n## Safe"' });
+    expect(changeDetails(server!)).toContain('Its environment:\n\n```\nNODE_ENV="a\\nb"\nTOKEN=s3cret\n```');
+  });
+
+  it("names the bots a change touches other than the one proposing it", () => {
+    const changes = ChangesSchema.parse([
+      { type: "update_bot", bot: "solo", title: "x" },
+      { type: "add_routine", bot: "Scout", name: "R", instructions: "x", schedule: { type: "daily", time: "09:00" } },
+      { type: "delete_bot", bot: "Chief" },
+      { type: "create_team", name: "New" },
+    ]);
+    expect(otherBots(changes, { id: "solo", name: "Solo" })).toEqual(["Scout", "Chief"]);
+    expect(otherBots(changes, undefined)).toEqual(["solo", "Scout", "Chief"]);
   });
 
   it("gives an overview and a bot's details", () => {

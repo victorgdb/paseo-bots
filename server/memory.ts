@@ -1,7 +1,8 @@
-import { appendFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { localDay, parseLog, type LogEntry } from "../shared/activity";
 import { botDataPath } from "./bot-home";
+import { appendInside, removeInside } from "./safe-fs";
 
 /** OpenMausBot's budget: the first 200 lines or 24 KB of MEMORY.md go into every chat. */
 const MEMORY_MAX_LINES = 200;
@@ -82,8 +83,7 @@ function logPath(botId: string, day: string): string {
 
 /** Adds a line to today's log, memory/log/YYYY-MM-DD.md. */
 export async function appendDailyLog(botId: string, line: string, at = new Date()): Promise<void> {
-  await mkdir(logFolder(botId), { recursive: true });
-  await appendFile(logPath(botId, localDay(at)), `${line}\n`, { encoding: "utf8", mode: 0o600 });
+  await appendInside(botDataPath(botId), logPath(botId, localDay(at)), `${line}\n`, 0o600);
 }
 
 /** The log's days, newest first, with how many lines each has. */
@@ -103,7 +103,7 @@ export async function readLogDay(botId: string, day: string) {
 }
 
 export async function deleteLogDay(botId: string, day: string) {
-  await rm(logPath(botId, day), { force: true });
+  await removeInside(botDataPath(botId), logPath(botId, day));
   return { ok: true };
 }
 

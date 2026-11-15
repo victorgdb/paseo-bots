@@ -28,11 +28,10 @@ function libraryServer(draft: BotMcpServer, name: string, now: string): LibraryM
 
 /**
  * Adds MCP servers to the library. A server whose name and connection match an
- * existing one reuses it; `reuseByName` also reuses any server with the same
- * name (templates: the user may have filled in keys since). Anything else gets a
- * free name. Returns the new library and the ids, in input order.
+ * existing one reuses it, unless `reuse` is false. Anything else gets a free
+ * name. Returns the new library and the ids, in input order.
  */
-export function addMcpServers(library: Library, drafts: readonly BotMcpServer[], options: { reuseByName?: boolean; now?: string } = {}): { library: Library; ids: string[] } {
+export function addMcpServers(library: Library, drafts: readonly BotMcpServer[], options: { reuse?: boolean; now?: string } = {}): { library: Library; ids: string[] } {
   const now = options.now ?? new Date().toISOString();
   const servers = [...library.mcpServers];
   const ids: string[] = [];
@@ -40,7 +39,7 @@ export function addMcpServers(library: Library, drafts: readonly BotMcpServer[],
     const name = draft.name.trim();
     if (!name) continue;
     const config = JSON.stringify(draft.config);
-    const existing = servers.find((server) => server.name === name && (options.reuseByName || JSON.stringify(server.config) === config));
+    const existing = options.reuse === false ? undefined : servers.find((server) => server.name === name && JSON.stringify(server.config) === config);
     if (existing) {
       ids.push(existing.id);
       continue;
@@ -123,18 +122,28 @@ export interface ImportedBot {
 
 /**
  * Adds imported bots, numbering names already in use; their skills (unreviewed, so
- * off) and MCP servers join the library, and a team file's teams come along.
+ * off) and MCP servers (untested, so off) join the library, and a team file's teams come along.
  */
 export function addImportedBots(values: BotSettingsValues, imported: readonly ImportedBot[], teams: readonly TeamFileTeam[] = [], now: string = new Date().toISOString()): BotSettingsValues {
   let library = values.library ?? EMPTY_LIBRARY;
+  // The file's servers, by name and connection, to their new ids: bots in one file share them.
+  const fromFile = new Map<string, string>();
   const bots = [...values.bots];
   for (const entry of imported) {
     const name = numberedName(entry.bot.name, new Set(bots.map((bot) => bot.name)));
     const known = new Set(library.skills.map((skill) => skill.id));
     library = upsertSkills(library, entry.skills.filter((skill) => !known.has(skill.id)));
-    const added = addMcpServers(library, entry.mcpServers, { reuseByName: true });
-    library = added.library;
-    bots.push({ ...entry.bot, name, mcpServerIds: [...new Set([...entry.bot.mcpServerIds, ...added.ids])] });
+    const serverIds = entry.mcpServers.flatMap((draft) => {
+      const key = JSON.stringify([draft.name.trim(), draft.config]);
+      if (!fromFile.has(key)) {
+        // Never one of the user's own servers, switched on and holding their keys, even by the same name.
+        const added = addMcpServers(library, [draft], { reuse: false });
+        library = added.library;
+        if (added.ids[0]) fromFile.set(key, added.ids[0]);
+      }
+      return fromFile.get(key) ?? [];
+    });
+    bots.push({ ...entry.bot, name, mcpServerIds: [...new Set([...entry.bot.mcpServerIds, ...serverIds])] });
   }
   const idAt = (position: number) => imported[position]?.bot.id;
   const groups = teams.reduce((current, team) => {

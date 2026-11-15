@@ -26,11 +26,18 @@ interface McpPageProps {
   onDelete(): void;
 }
 
-/** Keys only: values are usually secrets. */
+/**
+ * The environment in full, since it changes what the program does (NODE_OPTIONS can load
+ * any code) and the test runs it; header values are usually secrets, so only their names.
+ */
 function keysHint(server: LibraryMcpServer): string | null {
   const { config } = server;
-  const keys = Object.keys(config.type === "stdio" ? config.env : config.headers);
-  return keys.length ? `${config.type === "stdio" ? "Environment" : "Headers"}: ${keys.join(", ")}` : null;
+  if (config.type === "stdio") {
+    const pairs = Object.entries(config.env).map(([key, value]) => `${key}=${JSON.stringify(value)}`);
+    return pairs.length ? `Environment:\n${pairs.join("\n")}` : null;
+  }
+  const keys = Object.keys(config.headers);
+  return keys.length ? `Headers: ${keys.join(", ")}` : null;
 }
 
 export function McpPage({ colors, server, bots, otherNames, showTitle, onPatch, onToggleBot, onDelete }: McpPageProps) {

@@ -46,7 +46,7 @@ Or paste `npm:@oliexe/paseo-bots` into **Settings → Plugins → Plugin source*
 2. Chat with it. Every chat is a thread in the bot's workspace; **Open in Paseo** in a chat's menu shows it in Paseo's own view.
 3. Open its settings with the panel button at the top right of a chat, or **Open bot settings** in the bot's menu. **Identity** holds the name, avatar and voice, **Soul** its standing instructions, **Model** the provider and model, and **Permissions** the approval mode.
 
-Bots can do the setting up too. Ask one in a chat, for example "Create a research team of three bots with Scout as Chief of Staff", and it shows every change on one card; **Apply changes** makes them. A bot can create, edit and delete bots, teams, routines, library skills and MCP servers, and change what new bots start with. Each bot's earlier settings stay under **History** in its settings.
+Bots can do the setting up too. Ask one in a chat, for example "Create a research team of three bots with Scout as Chief of Staff", and it shows every change on one card; **Apply changes** makes them. A bot can create, edit and delete bots, teams, routines, library skills and MCP servers, and change what new bots start with. Routines added this way start paused. Each bot's earlier settings stay under **History** in its settings.
 
 ### Memory
 

@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Text, View } from "react-native";
 import { EMPTY_LIBRARY, newRoutineId, type Bot } from "../../../shared/bot";
-import { applyChanges, changeWarnings, describeChange } from "../../../shared/changes";
+import { applyChanges, changeDetails, changeWarnings, describeChange, otherBots } from "../../../shared/changes";
 import { setBotUses, updateSkill, upsertSkills } from "../../../shared/library";
 import type { Proposal } from "../../../shared/proposals";
 import { describeSchedule, upcomingRuns } from "../../../shared/routines";
@@ -55,7 +55,7 @@ export function ProposalCard({ colors, compact, proposalId }: { colors: Colors; 
       ? skillView(proposal, bot, !!values?.library?.skills.some((skill) => skill.id === proposal.data.name))
       : proposal.kind === "routine"
         ? routineView(proposal, bot)
-        : changesView(proposal);
+        : changesView(proposal, bot);
 
   const save = async () => {
     setBusy("save");
@@ -121,6 +121,8 @@ export function ProposalCard({ colors, compact, proposalId }: { colors: Colors; 
   return <PlanCard colors={colors} title={view.titles[proposal.status]} description={view.description} text={view.text} outcome={OUTCOME[proposal.status]} footer={footer} />;
 }
 
+const list = (items: readonly string[]) => items.join(", ");
+
 interface ProposalView {
   titles: Record<Proposal["status"], string>;
   description: string;
@@ -163,14 +165,17 @@ function routineView(proposal: Extract<Proposal, { kind: "routine" }>, bot: Bot 
   };
 }
 
-function changesView(proposal: Extract<Proposal, { kind: "changes" }>): ProposalView {
+function changesView(proposal: Extract<Proposal, { kind: "changes" }>, bot: Bot | undefined): ProposalView {
   const { summary, changes } = proposal.data;
   const count = changes.length === 1 ? "the change" : `all ${changes.length} changes`;
+  // Changes to bots other than the one in this chat say so up front.
+  const others = otherBots(changes, bot);
+  const also = others.length ? ` to ${list(others)}` : "";
   return {
-    titles: { pending: "Setup changes", accepted: "Applied setup changes", dismissed: "Dismissed setup changes" },
+    titles: { pending: `Setup changes${also}`, accepted: `Applied setup changes${also}`, dismissed: `Dismissed setup changes${also}` },
     description: summary,
-    text: changes.map((change) => `- ${describeChange(change)}`).join("\n"),
-    warnings: changeWarnings(changes),
+    text: changes.map((change) => [`- ${describeChange(change)}`, changeDetails(change)].filter(Boolean).join("\n\n")).join("\n"),
+    warnings: [...(others.length ? [`Changes bots other than ${bot ? `${bot.name}, the bot in this chat` : "the bot in this chat"}: ${list(others)}.`] : []), ...changeWarnings(changes)],
     notes: [`Apply ${count}? A bot's earlier settings stay under History in its settings.`],
     action: "Apply changes",
   };

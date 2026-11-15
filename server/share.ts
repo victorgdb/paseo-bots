@@ -1,4 +1,4 @@
-import { lstat, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { z } from "zod";
 import { BotMcpServerSchema, BotSchema, botMcpServers, botSkills, newBotId, newRoutineId, TeamFileTeamSchema, type Bot, type BotGroup, type BotMcpServer, type Library, type TeamFileTeam } from "../shared/bot";
@@ -57,8 +57,10 @@ function redact(servers: BotMcpServer[]): BotMcpServer[] {
   }));
 }
 
+/** The files under `root`. Links and hard links are skipped: an agent can plant one in its folder (memory/x -> ~) to pull private files into an export. */
 async function collect(root: string, include: (path: string) => boolean): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
+  if ((await lstat(root).catch(() => null))?.isSymbolicLink()) return files;
   const walk = async (dir: string) => {
     let names: string[];
     try {
@@ -69,9 +71,9 @@ async function collect(root: string, include: (path: string) => boolean): Promis
     for (const name of names) {
       if (Object.keys(files).length >= MAX_FILES) return;
       const path = join(dir, name);
-      const info = await stat(path);
+      const info = await lstat(path);
       if (info.isDirectory()) await walk(path);
-      else {
+      else if (info.isFile() && info.nlink === 1) {
         const key = relative(root, path).split(sep).join("/");
         if (include(key)) files[key] = await readFile(path, "utf8");
       }
@@ -169,6 +171,8 @@ export async function importBot({ botId, json }: { botId: string; json: string }
   const bot: Bot = {
     ...parsed.bot,
     id: botId,
+    // A file can't pick an approval mode that skips the user's approvals; the bot starts on the provider's default.
+    modeId: null,
     hostId: null,
     cwd: null,
     alwaysAllow: [],

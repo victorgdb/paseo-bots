@@ -38,6 +38,8 @@ const Ids = (what: string) => z.array(z.string().min(1).max(100)).max(100).descr
 const IMAGE_URL = /^(https?:\/\/\S+|data:image\/\S+)$/i;
 const APP_SLUG = /^[a-z0-9_-]{1,60}$/i;
 const TOOL_GRANT = /^[A-Za-z0-9_-]{1,64}\/\S{1,200}$/;
+/** Variables that make a program load other code than the command shows; a proposed server can't set them. */
+const LOADER_ENV = /^(NODE_OPTIONS|PATH|PYTHONPATH|PYTHONSTARTUP|PERL5OPT|RUBYOPT|BASH_ENV|ENV|DYLD_.*|LD_.*)$/i;
 
 const Colour = z.number().int().min(0).max(PALETTE_COUNT - 1).nullable().optional();
 const ImageUrl = z.string().max(2000).nullable().optional().describe("An https:// picture shown instead of the pixel art; null removes it.");
@@ -506,7 +508,8 @@ function applyChange(values: BotSettingsValues, change: Change, context: ApplyCo
     }
     case "add_routine": {
       const bot = findBot(values, change.bot);
-      const routine = { id: newRoutineId(), name: change.name.trim(), prompt: change.instructions.trim(), enabled: true, schedule: scheduleFrom(change.schedule, new Date(context.now)), resultsChatId: null, createdAt: context.now };
+      // Paused until the user turns it on: a proposal doesn't start running anything by itself.
+      const routine = { id: newRoutineId(), name: change.name.trim(), prompt: change.instructions.trim(), enabled: false, schedule: scheduleFrom(change.schedule, new Date(context.now)), resultsChatId: null, createdAt: context.now };
       return withBot(values, { ...bot, routines: [...bot.routines, routine] }, context);
     }
     case "update_routine": {
@@ -561,6 +564,8 @@ function applyChange(values: BotSettingsValues, change: Change, context: ApplyCo
       if (RESERVED_MCP_NAMES.includes(name)) throw new Error(`"${name}" is taken by Paseo or this plugin. Pick another name.`);
       if (library.mcpServers.some((server) => server.name === name)) throw new Error(`There's already an MCP server called "${name}".`);
       if (!change.command === !change.url) throw new Error("Give either a command (a local server) or a URL (a remote one).");
+      const loader = Object.keys(change.env ?? {}).find((key) => LOADER_ENV.test(key.trim()));
+      if (loader) throw new Error(`A proposed server can't set ${loader}: it changes what code the program loads. The user can add it in Skills & Tools.`);
       const config: McpServerConfig = change.command
         ? { type: "stdio", command: change.command.trim(), args: change.args ?? [], env: change.env ?? {} }
         : { type: change.transport ?? "http", url: change.url!.trim(), headers: change.headers ?? {} };
@@ -629,6 +634,41 @@ export function resolveChanges(changes: readonly Change[], context: ApplyContext
 
 const list = (items: readonly string[]) => items.join(", ");
 
+/** On one line, so the text can't start a Markdown block of its own (Markdown counts a lone \r as a line break too). */
+function flatLine(text: string): string {
+  return text.replace(/\s*[\r\n]\s*/g, " ").trim();
+}
+
+/** A word as is, or quoted with escapes, so newlines, quotes and invisible characters show. */
+function quote(text: string): string {
+  if (/^[\w@%+=:,./-]+$/.test(text)) return text;
+  return JSON.stringify(text).replace(/[\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+/** The longest run of backticks in the text. */
+function backticks(text: string): number {
+  return Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+}
+
+/** Inline code the text can't end early: its backticks outnumber any run inside. */
+function codeSpan(text: string): string {
+  const flat = flatLine(text);
+  const marks = "`".repeat(backticks(flat) + 1);
+  const pad = /^[` ]|[` ]$/.test(flat) ? " " : "";
+  return `${marks}${pad}${flat}${pad}${marks}`;
+}
+
+/** A code block the text can't end early: its fence is longer than any run of backticks inside. */
+function codeBlock(text: string): string {
+  const fence = "`".repeat(Math.max(3, backticks(text) + 1));
+  return `${fence}\n${text}\n${fence}`;
+}
+
+/** A stdio server's command line, each part quoted when it needs to be. */
+function commandLine(command: string, args: readonly string[] = []): string {
+  return [command, ...args].map(quote).join(" ");
+}
+
 function appText(entry: AppInputValue): string {
   const tools = !entry.tools || entry.tools === "all" ? "" : entry.tools === "read" ? " (read-only tools)" : ` (${list(entry.tools)})`;
   return `${entry.app}${tools}${entry.account ? " with one account" : ""}`;
@@ -666,6 +706,10 @@ function scheduleText(input: z.infer<typeof ScheduleInput>): string {
 
 /** One Markdown line for the card, as the user reads the change. */
 export function describeChange(change: Change): string {
+  return flatLine(changeLine(change));
+}
+
+function changeLine(change: Change): string {
   switch (change.type) {
     case "create_bot": {
       const parts = [
@@ -699,7 +743,7 @@ export function describeChange(change: Change): string {
     case "delete_bot":
       return `**Delete bot ${change.bot}**; its chats stay in Paseo's history`;
     case "add_routine":
-      return `**${change.bot}**: new routine "${change.name}", ${scheduleText(change.schedule)}`;
+      return `**${change.bot}**: new routine "${change.name}", ${scheduleText(change.schedule)}; paused until you turn it on`;
     case "update_routine": {
       const parts = [
         ...(change.name !== undefined ? [`renamed to "${change.name}"`] : []),
@@ -736,7 +780,7 @@ export function describeChange(change: Change): string {
     case "set_skill":
       return `**Skill ${change.skill}**: ${change.enabled ? "on" : "off"} for every bot that uses it`;
     case "add_mcp_server":
-      return `**New MCP server ${change.name}**: ${change.command ? `runs \`${[change.command, ...(change.args ?? [])].join(" ")}\`` : `connects to ${change.url}`}; off until it passes a test in Skills & Tools`;
+      return `**New MCP server ${change.name}**: ${change.command ? `runs ${codeSpan(commandLine(change.command, change.args))}${Object.keys(change.env ?? {}).length ? " with the environment below" : ""}` : `connects to ${codeSpan(change.url ?? "")}`}; off until it passes a test in Skills & Tools`;
     case "set_mcp_server":
       return `**MCP server ${change.server}**: ${change.enabled ? "on" : "off"}`;
     case "remove_mcp_server":
@@ -750,6 +794,60 @@ export function describeChange(change: Change): string {
     case "delete_preset":
       return `**Delete preset ${change.preset}**`;
   }
+}
+
+/**
+ * Everything the change would put in place word for word, as labelled code
+ * blocks under its line on the card: the line only names it, and the user
+ * approves what's in here.
+ */
+export function changeDetails(change: Change): string {
+  const blocks: string[] = [];
+  const show = (label: string, text: string | undefined) => {
+    if (text === undefined) return;
+    blocks.push(text.trim() ? `${flatLine(label)}:\n\n${codeBlock(text.trim())}` : `${flatLine(label)}: empty`);
+  };
+  const showBot = (who: string, fields: BotFieldValues, playbooks: readonly z.infer<typeof PlaybookInput>[] = []) => {
+    show(`Blurb of ${who}`, fields.description);
+    show(`Instructions of ${who}`, fields.instructions);
+    for (const playbook of playbooks) show(`Playbook "${playbook.name}" of ${who}, for chats that start with ${list(playbook.triggers.map(quote))}`, playbook.instructions);
+  };
+  switch (change.type) {
+    case "create_bot":
+      showBot(change.name, change, change.playbooks);
+      break;
+    case "update_bot":
+      showBot(change.bot, change, change.add_playbooks);
+      break;
+    case "add_routine":
+      show(`What routine "${change.name}" of ${change.bot} does on each run`, change.instructions);
+      break;
+    case "update_routine":
+      show(`What routine "${change.routine}" of ${change.bot} does on each run`, change.instructions);
+      break;
+    case "create_team":
+      show(`Shared instructions of team ${change.name}`, change.instructions);
+      break;
+    case "update_team":
+      show(`Shared instructions of team ${change.team}`, change.instructions);
+      break;
+    case "add_mcp_server": {
+      show(`Description of ${change.name}`, change.description);
+      if (change.command) show(`The program ${change.name} runs`, commandLine(change.command, change.args));
+      const pairs = change.command ? Object.entries(change.env ?? {}).map(([key, value]) => `${quote(key)}=${quote(value)}`) : Object.entries(change.headers ?? {}).map(([key, value]) => `${quote(key)}: ${quote(value)}`);
+      if (pairs.length) show(change.command ? "Its environment" : "Headers it sends", pairs.join("\n"));
+      break;
+    }
+    default:
+      break;
+  }
+  return blocks.join("\n\n");
+}
+
+/** The bots the changes edit that aren't `own`, the bot whose chat proposed them (any, when it isn't known). */
+export function otherBots(changes: readonly Change[], own: Pick<Bot, "id" | "name"> | undefined): string[] {
+  const isOwn = (ref: string) => !!own && (ref.trim() === own.id || ref.trim().toLowerCase() === own.name.trim().toLowerCase());
+  return [...new Set(changes.flatMap((change) => ("bot" in change && !isOwn(change.bot) ? [flatLine(change.bot)] : [])))];
 }
 
 /** What deserves a second look before applying: more access, and anything deleted. */

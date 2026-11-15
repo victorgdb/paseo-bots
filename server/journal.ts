@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redactSecrets } from "../shared/activity";
 import { lineDiff } from "../shared/diff";
 import { pluginDataPath } from "./bot-home";
 import { MAIN_MEMORY, memoryFilePath, memoryFolder } from "./memory";
+import { removeInside, writeInside } from "./safe-fs";
 
 // OpenMausBot's memory journal: every change to a bot's MEMORY.md and topic
 // files, with the earlier text so it can be undone. Bots edit their memory with
@@ -94,11 +95,8 @@ export class MemoryJournal {
   private async apply(botId: string, file: string, text: string | null, via: "app" | "undo"): Promise<void> {
     const path = memoryFilePath(botId, file);
     const before = await readFile(path, "utf8").catch(() => null);
-    if (text === null) await rm(path, { force: true });
-    else {
-      await mkdir(join(path, ".."), { recursive: true });
-      await writeFile(path, text, "utf8");
-    }
+    if (text === null) await removeInside(memoryFolder(botId), path);
+    else await writeInside(memoryFolder(botId), path, text);
     await this.append(botId, file, before, text, { actor: "you", via, chat: null });
     const seen = this.seen.get(botId);
     if (seen) {

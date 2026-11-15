@@ -304,6 +304,7 @@ function BotsSurfaceContent({ theme, layout, host, navigation }: PluginSurfacePr
       name: `${bot.name} copy`,
       hostId: bot.hostId,
       cwd: bot.cwd,
+      modeId: bot.modeId,
       alwaysAllow: bot.alwaysAllow,
       skillIds: bot.skillIds,
       mcpServerIds: bot.mcpServerIds,

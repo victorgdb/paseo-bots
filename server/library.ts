@@ -4,6 +4,7 @@ import { dirname, join, posix, relative, sep } from "node:path";
 import type { LibrarySkill } from "../shared/bot";
 import { parseSkillFrontmatter, parseSkillSource, sanitizeSkillName } from "../shared/skills";
 import { botDataPath, botsHomePath, pluginDataPath } from "./bot-home";
+import { refuseLinks } from "./safe-fs";
 
 // The shared skill library: one folder per skill under plugin-data/library/skills.
 // Bots that use the managed folder get a link to each of their skills in
@@ -145,6 +146,13 @@ export async function migrateBotSkills(): Promise<void> {
   for (const bot of bots) {
     if (!bot.isDirectory()) continue;
     const skillsDir = join(botsHomePath(), bot.name, "skills");
+    try {
+      // A linked skills folder would move whatever it points at into the library.
+      await refuseLinks(join(botsHomePath(), bot.name), skillsDir);
+    } catch (error) {
+      console.error("paseo-bots: skipped a bot's skills folder", error);
+      continue;
+    }
     const skills = await readdir(skillsDir, { withFileTypes: true }).catch(() => []);
     for (const skill of skills) {
       if (!skill.isDirectory()) continue;
@@ -164,6 +172,14 @@ export async function migrateBotSkills(): Promise<void> {
 export async function linkBotSkills(botId: string, ids: readonly string[]): Promise<Map<string, string>> {
   const dir = join(botDataPath(botId), "skills");
   const paths = new Map<string, string>();
+  try {
+    await refuseLinks(botDataPath(botId), dir);
+  } catch (error) {
+    // Pruning links inside a linked folder would unlink files wherever it points; give the agent the library copies.
+    console.error("paseo-bots: not linking skills", error);
+    for (const id of ids) paths.set(id, join(librarySkillPath(id), "SKILL.md"));
+    return paths;
+  }
   await mkdir(dir, { recursive: true }).catch(() => {});
   const existing = await readdir(dir, { withFileTypes: true }).catch(() => []);
   for (const entry of existing) {
