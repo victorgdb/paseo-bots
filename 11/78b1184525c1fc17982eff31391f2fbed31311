@@ -1,0 +1,45 @@
+server/safe-fs.ts
+  s_ae0701dc3499e9::t_4a80048d9d6c59 1-62
+README.md
+  s_ae0701dc3499e9::t_71f10a32b19c45 49
+client/BotsSurface.tsx
+  s_ae0701dc3499e9::t_a7efa67b37f83a 307
+client/chat/stream/ProposalCard.tsx
+  s_ae0701dc3499e9::t_61dc1ddce293ff 8,58,124-125,168,171-173,175,177-178
+client/library/McpPage.tsx
+  s_ae0701dc3499e9::t_042bfd7f9f4c23 29-32,35-40
+server/journal.ts
+  s_ae0701dc3499e9::t_38fb1cb6e30828 2,8,98-99
+server/library.ts
+  s_ae0701dc3499e9::t_8546a5eca834d7 7,149-155,175-182
+server/memory.ts
+  s_ae0701dc3499e9::t_0c17ca4dbce009 1,5,86,106
+server/share.ts
+  s_ae0701dc3499e9::t_151bef7d1015ca 1,60,63,74,76,174-175
+server/uploads.ts
+  s_ae0701dc3499e9::t_218a5f9e1a18cb 3,10
+shared/changes.ts
+  s_ae0701dc3499e9::t_fd6f7fb8afdd44 41-42,511-512,567-568,637-671,709-712,746,783,799-852
+shared/library.ts
+  s_ae0701dc3499e9::t_b6129bec82b5b7 31-32,34,42,125,129-130,136-146
+tests/changes.test.ts
+  s_ae0701dc3499e9::t_3adbd7167f20fc 3-4,138-185
+tests/library.test.ts
+  s_ae0701dc3499e9::t_ea5fe539287765 2,7,53-55,57-63,226-347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1178b1184525c1fc17982eff31391f2fbed31311",
+  "prompts": {},
+  "sessions": {
+    "s_ae0701dc3499e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "019c5007-1179-4bab-a95a-d27b673e881a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "victorgdb <victor.debouille@gmail.com>"
+    }
+  }
+}
